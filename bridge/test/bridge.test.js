@@ -423,6 +423,61 @@ test('schema errors from T3 Code read as a version mismatch', () => {
   assert.equal(friendlyError('nothing is running in that thread'), 'nothing is running in that thread');
 });
 
+test('a thread waiting on subagents or awaited work is still working, not finished', async () => {
+  const { threadStatus, runActive } = await import('../src/t3.js');
+  const ended = { status: 'completed', activityRunStatus: null };
+  const waiting = (pendingBackgroundTasks) => ({ ...ended, pendingBackgroundTasks });
+  assert.equal(threadStatus(ended), 'open');
+  assert.equal(threadStatus(waiting([{ taskId: 'a', kind: 'subagent' }])), 'working');
+  assert.equal(threadStatus(waiting([{ taskId: 'b', kind: 'command', awaited: true }])), 'working');
+  // A dev server or watcher left running doesn't keep the thread from finishing.
+  assert.equal(threadStatus(waiting([{ taskId: 'c', kind: 'command' }, { taskId: 'd', kind: 'monitor' }])), 'open');
+  assert.equal(threadStatus({ ...waiting([{ taskId: 'a', kind: 'subagent' }]), status: 'failed' }), 'failed');
+  assert.equal(runActive(waiting([{ taskId: 'a', kind: 'subagent' }])), false);
+});
+
+test('a message to a waiting thread starts a run; one to a running thread steers or queues', async () => {
+  const { T3Client } = await import('../src/t3.js');
+  const c = new T3Client({ log: () => {} });
+  const modes = [];
+  c.dispatch = async (command) => modes.push(command.dispatchMode);
+  c.threads.set('waiting', { id: 'waiting', status: 'completed', activityRunStatus: null, activeRunId: null, pendingBackgroundTasks: [{ taskId: 'a', kind: 'subagent' }] });
+  c.threads.set('running', { id: 'running', status: 'running', activityRunStatus: 'running', activeRunId: 'r1' });
+  await c.sendMessage('waiting', 'hi');
+  await c.sendMessage('waiting', 'hi', 'steer');
+  await c.sendMessage('running', 'hi');
+  await c.sendMessage('running', 'hi', 'steer');
+  assert.deepEqual(modes, [
+    { type: 'start_immediately' },
+    { type: 'start_immediately' },
+    { type: 'queue_after_active' },
+    { type: 'steer_active', targetRunId: 'r1' },
+  ]);
+});
+
+test('subagents and tasks delegated from another machine stay out of the thread list', async () => {
+  const { T3Client } = await import('../src/t3.js');
+  const c = new T3Client({ log: () => {} });
+  const changes = [];
+  c.on('change', (ev) => changes.push(ev));
+  const thread = (id, extra) => ({ id, status: 'completed', updatedAt: '2026-01-01T00:00:00.000Z', lineage: { parentThreadId: null }, ...extra });
+  c.onShell({
+    kind: 'snapshot',
+    snapshot: {
+      threads: [
+        thread('top'),
+        thread('handoff', { createdBy: 'agent', creationSource: 'mcp', delegatedFrom: null }),
+        thread('sub', { lineage: { parentThreadId: 'top' } }),
+        thread('remote-task', { delegatedFrom: { environmentId: 'e2', threadId: 'p', title: 'Parent' } }),
+      ],
+    },
+  });
+  assert.deepEqual([...c.threads.keys()], ['top', 'handoff']);
+  c.onShell({ kind: 'thread.updated', thread: thread('remote-task', { delegatedFrom: { environmentId: 'e2', threadId: 'p', title: 'Parent' } }) });
+  assert.equal(c.threads.has('remote-task'), false);
+  assert.equal(changes.filter((ev) => ev.kind === 'thread').length, 0);
+});
+
 test('a settled thread shows as settled even with an unreviewed plan', async () => {
   const { threadStatus } = await import('../src/t3.js');
   const t = { status: 'completed', hasActionableProposedPlan: true, settledOverride: 'settled' };

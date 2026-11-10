@@ -26,11 +26,31 @@ export function readRuntime() {
 
 const WORKING = new Set(['preparing', 'queued', 'starting', 'running', 'waiting']);
 
+// A run is in flight, so a new message has something to steer or queue behind.
+export function runActive(t) {
+  return Boolean(t.activityRunStatus) || WORKING.has(t.status);
+}
+
+// The last run ended, but the agent is waiting on subagents or background work it marked
+// as awaited, and wakes when they finish. T3 Code shows this as Waiting, not as finished.
+// Commands and monitors left running (a dev server) only count when marked awaited.
+export function awaitsBackgroundWork(t) {
+  if (t.status === 'failed') return false;
+  return (t.pendingBackgroundTasks || []).some(
+    (task) => task.awaited === true || task.kind === 'subagent' || task.kind === 'background_task',
+  );
+}
+
+// A subagent, or a task another machine's thread delegated here. Their parent speaks for them.
+export function isChildThread(t) {
+  return Boolean(t.lineage?.parentThreadId) || t.delegatedFrom != null;
+}
+
 // Collapse the server's thread fields into the handful the game needs.
 export function threadStatus(t) {
   if (t.archivedAt || t.deletedAt) return 'archived';
   if (t.pendingRuntimeRequest) return 'input';
-  if (t.activityRunStatus || WORKING.has(t.status)) return 'working';
+  if (runActive(t) || awaitsBackgroundWork(t)) return 'working';
   // Settled wins over an unreviewed plan: settling is how you say you're done with it.
   if (t.settledOverride === 'settled') return 'settled';
   if (t.hasActionableProposedPlan) return 'plan';
@@ -328,7 +348,7 @@ export class T3Client extends EventEmitter {
       // Follow-up snapshot frames can carry only projects (threads: []): keep threads.
       if (Array.isArray(snap.threads) && snap.threads.length > 0) {
         this.threads.clear();
-        for (const t of snap.threads) if (!t.lineage?.parentThreadId) this.threads.set(t.id, t);
+        for (const t of snap.threads) if (!isChildThread(t)) this.threads.set(t.id, t);
       }
       if (Array.isArray(snap.projects)) for (const p of snap.projects) this.projects.set(p.id, p);
       if (typeof snap.olderSettled === 'number') this.olderSettled = snap.olderSettled;
@@ -338,7 +358,7 @@ export class T3Client extends EventEmitter {
       this.emit('change', { kind: 'snapshot' });
     } else if (item.kind === 'thread.updated') {
       const t = item.thread;
-      if (!t || t.lineage?.parentThreadId) return;
+      if (!t || isChildThread(t)) return;
       const prev = this.threads.get(t.id);
       this.threads.set(t.id, t);
       if (!prev || prev.updatedAt !== t.updatedAt || threadStatus(prev) !== threadStatus(t)) {
@@ -394,7 +414,7 @@ export class T3Client extends EventEmitter {
 
   sendMessage(threadId, text, mode = 'auto', attachments = []) {
     const t = this.threads.get(threadId);
-    const busy = t && threadStatus(t) === 'working';
+    const busy = t && runActive(t);
     let dispatchMode = { type: 'start_immediately' };
     if (mode === 'steer' && t?.activeRunId) dispatchMode = { type: 'steer_active', targetRunId: t.activeRunId };
     else if (busy) dispatchMode = { type: 'queue_after_active' };

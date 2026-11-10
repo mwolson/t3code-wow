@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto';
 import { RS, US } from './codec.js';
 import { StripCapture } from './capture.js';
 import { SlotBank } from './slots.js';
-import { threadStatus, isUnread, effortOf } from './t3.js';
+import { threadStatus, runActive, isUnread, effortOf } from './t3.js';
 import { Fleet } from './fleet.js';
 import { tokenProvider } from './auth.js';
 import { Voice } from './voice.js';
@@ -32,6 +32,13 @@ const sec = (iso) => (iso ? Math.floor(Date.parse(iso) / 1000) : undefined);
 
 const ACTIVE = new Set(['working', 'input', 'plan']);
 const ORDER = { input: 0, plan: 1, working: 2, failed: 3, open: 4, settled: 5 };
+
+// A working thread with nothing live to name: queued, between steps, or waiting on work
+// it started in the background.
+function idleWorkingLabel(t) {
+  if (t.status === 'queued') return 'Queued';
+  return runActive(t) ? 'Working' : 'Waiting on background work';
+}
 
 export function activityLabel(projection) {
   if (!projection) return null;
@@ -729,7 +736,7 @@ export class Bridge {
       const v = this.views.get(t.id);
       const proj = v?.projection;
       let label;
-      if (s === 'working') label = activityLabel(proj) || (t.status === 'queued' ? 'Queued' : 'Working');
+      if (s === 'working') label = activityLabel(proj) || idleWorkingLabel(t);
       else if (s === 'input') label = t.pendingRuntimeRequest?.kind === 'user_input' ? 'Needs your answer' : 'Needs your approval';
       else if (s === 'plan') label = 'Plan ready';
       else if (s === 'failed') label = t.lastError ? `Failed: ${String(t.lastError).slice(0, 60)}` : 'Failed';
@@ -746,6 +753,8 @@ export class Bridge {
         // (the game shows elapsed time), so leave it out to avoid pointless publishes.
         u: s === 'working' ? undefined : sec(t.updatedAt),
         st: sec(t.activityRunStartedAt || t.latestRunStartedAt),
+        // Working with no run in flight: nothing to stop or steer, and a message starts a run.
+        w: s === 'working' && !runActive(t) ? true : undefined,
         un: s !== 'settled' && isUnread(t) ? true : undefined,
         br: t.branch ? escapeWow(t.branch) : undefined,
         m: t.modelSelection?.model,
@@ -794,7 +803,7 @@ export class Bridge {
           msgs: out,
           more: msgs.length > out.length || undefined,
           pending: pendingRequest(p) || undefined,
-          act: t && threadStatus(t) === 'working' ? escapeWow(activityLabel(p) || 'Working') : undefined,
+          act: t && threadStatus(t) === 'working' ? escapeWow(activityLabel(p) || idleWorkingLabel(t)) : undefined,
           err: t?.lastError ? escapeWow(String(t.lastError).slice(0, 300)) : undefined,
           plan: t && threadStatus(t) === 'plan' && proposedPlan(p) ? markdownToWow(proposedPlan(p), { maxChars: 6000 }) : undefined,
           sum: runSummary(p) ? escapeWow(runSummary(p)) : undefined,

@@ -690,7 +690,8 @@ function M:Refresh()
 			local pickers = (withModel and header.Model:GetWidth() + 4 or 0) + (withEffort and header.Effort:GetWidth() + 4 or 0)
 			header.Text:SetPoint("RIGHT", (t.s == "settled" and -200 or -110) - pickers, 0)
 			local busy = ns.db.settings.steerFollowUps and "Steer the agent" or "Queue a follow-up"
-			self:SetPlaceholder((t.s == "working" and busy or "Message the agent") .. "  (Shift+Enter for a new line)")
+			-- t.w: waiting on subagents with no run in flight, so a message starts one.
+			self:SetPlaceholder((t.s == "working" and not t.w and busy or "Message the agent") .. "  (Shift+Enter for a new line)")
 		else
 			f.Subtitle:SetText(ns.Color("grey", "No thread selected"))
 			header.Text:SetText(ns.Color("grey", "Pick a thread on the left, or start a new one"))
@@ -701,7 +702,7 @@ function M:Refresh()
 		end
 		right.Hint:SetText(self:ShotHint() or (ns.Gamepad and ns.Gamepad:IsActive() and ns.Gamepad:HintText()) or "")
 	end
-	f.Bar.Stop:SetEnabled(t ~= nil and t.s == "working" and self.mode ~= "new")
+	f.Bar.Stop:SetEnabled(t ~= nil and t.s == "working" and not t.w and self.mode ~= "new")
 	f.Bar.Stop.Icon:SetDesaturated(not f.Bar.Stop:IsEnabled())
 	local bridge = ns.Store.data.bridge
 	local canDictate = self.dictating or not (bridge and bridge.dictationHint)
