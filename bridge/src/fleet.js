@@ -6,7 +6,7 @@
 // copy with `id`/`projectId` rewritten and `_env` pointing at its machine.
 
 import { EventEmitter } from 'node:events';
-import { T3Client, modelChoices } from './t3.js';
+import { T3Client, modelChoices, isDelegatedThread } from './t3.js';
 import { remoteTokenProvider, remoteOriginProvider } from './envs.js';
 
 const SEP = '~';
@@ -139,7 +139,7 @@ export class Fleet extends EventEmitter {
       local: e.local || undefined,
       state: e.client.state,
       error: e.client.error || undefined,
-      threads: [...e.client.threads.values()].filter((t) => !t.lineage?.parentThreadId).length,
+      threads: [...e.client.threads.values()].filter((t) => !isDelegatedThread(t)).length,
     }));
   }
 

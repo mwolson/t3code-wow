@@ -44,9 +44,20 @@ export function threadStatus(t) {
 // What an idle-but-waiting thread is waiting for, or null.
 export function waitingOn(t) {
   if (t.activityRunStatus || WORKING.has(t.status)) return null;
-  const task = (t.pendingBackgroundTasks || []).find((b) => b?.awaited);
-  if (task) return task.description || 'Waiting';
+  const task = (t.pendingBackgroundTasks || []).find(holdsThread);
+  if (task) return task.description || (task.kind === 'subagent' ? 'Waiting on a subagent' : 'Waiting');
   return t.blockedOnThreadWait ? 'Waiting on another thread' : null;
+}
+
+// T3 holds a thread for its subagents and background tasks. A command or monitor is as
+// often a dev server left running, so it holds only once the agent marks it awaited.
+function holdsThread(task) {
+  return Boolean(task?.awaited) || task?.kind === 'subagent' || task?.kind === 'background_task';
+}
+
+// A thread another agent drives: a subagent, or a task another machine's thread delegated here.
+export function isDelegatedThread(t) {
+  return Boolean(t.lineage?.parentThreadId) || t.delegatedFrom != null;
 }
 
 export function isUnread(t) {
@@ -66,7 +77,7 @@ export function pickModelSelection({ project, settings = {}, threads = [], provi
   }
   // Subagent threads run on whatever model their parent delegated to: not a choice.
   const latest = threads
-    .filter((t) => !t.deletedAt && !t.lineage?.parentThreadId && enabled(t.modelSelection))
+    .filter((t) => !t.deletedAt && !isDelegatedThread(t) && enabled(t.modelSelection))
     .sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
   return (latest.find((t) => project && t.projectId === project.id) || latest[0])?.modelSelection || null;
 }
@@ -143,7 +154,7 @@ export function chosenModelSelection({ instanceId, model }, { providers, candida
     // the level this carries over.
     const active = (t) => Date.parse(t.activityRunStartedAt || t.latestRunStartedAt || t.updatedAt || t.createdAt || 0);
     const latest = threads
-      .filter((t) => !t.deletedAt && !t.lineage?.parentThreadId && same(t.modelSelection))
+      .filter((t) => !t.deletedAt && !isDelegatedThread(t) && same(t.modelSelection))
       .sort((a, b) => active(b) - active(a))[0];
     options = latest?.modelSelection.options;
   }
