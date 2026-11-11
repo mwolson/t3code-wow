@@ -753,6 +753,36 @@ test('a thread waiting on a watched PR or another thread is waiting, not open', 
   assert.equal(waitingOn({ ...t, status: 'running', activityRunStatus: 'running' }), null);
 });
 
+test('a thread whose subagents or background tasks are still running is waiting, not open', async () => {
+  const { threadStatus, waitingOn } = await import('../src/t3.js');
+  const ended = (pendingBackgroundTasks) => ({ status: 'completed', pendingBackgroundTasks });
+  assert.equal(threadStatus(ended([{ taskId: 'a', kind: 'subagent' }])), 'waiting');
+  assert.equal(waitingOn(ended([{ taskId: 'a', kind: 'subagent' }])), 'Waiting on a subagent');
+  assert.equal(waitingOn(ended([{ taskId: 'a', kind: 'subagent', description: 'Review the diff' }])), 'Review the diff');
+  assert.equal(threadStatus(ended([{ taskId: 'b', kind: 'background_task' }])), 'waiting');
+  // A dev server or watcher left running doesn't keep the thread from finishing.
+  assert.equal(threadStatus(ended([{ taskId: 'c', kind: 'command' }, { taskId: 'd', kind: 'monitor' }])), 'open');
+});
+
+test('a message to a thread waiting on a subagent starts a run; one to a running thread steers or queues', async () => {
+  const { T3Client } = await import('../src/t3.js');
+  const c = new T3Client({ tokenProvider: async () => 'x' });
+  const modes = [];
+  c.dispatch = async (command) => modes.push(command.dispatchMode);
+  c.threads.set('waiting', { id: 'waiting', status: 'completed', activityRunStatus: null, activeRunId: null, pendingBackgroundTasks: [{ taskId: 'a', kind: 'subagent' }] });
+  c.threads.set('running', { id: 'running', status: 'running', activityRunStatus: 'running', activeRunId: 'r1' });
+  await c.sendMessage('waiting', 'hi');
+  await c.sendMessage('waiting', 'hi', 'steer');
+  await c.sendMessage('running', 'hi');
+  await c.sendMessage('running', 'hi', 'steer');
+  assert.deepEqual(modes, [
+    { type: 'start_immediately' },
+    { type: 'start_immediately' },
+    { type: 'queue_after_active' },
+    { type: 'steer_active', targetRunId: 'r1' },
+  ]);
+});
+
 test('a waiting thread is listed with what it waits for, timed from the end of its last run', () => {
   const { b } = fakeBridge();
   b.t3.threads.set('pr-watch', { id: 'pr-watch', title: 'Watch', projectId: 'p1', status: 'completed', updatedAt: new Date().toISOString(),
@@ -778,6 +808,9 @@ test('ending a turn into waiting is not announced; the wait ending is', async ()
   assert.deepEqual(said, ['open']);
   b.onT3Change({ kind: 'thread', prev: running, thread: { ...running, id: 'kid', lineage: { parentThreadId: 'w' }, status: 'completed', activityRunStatus: null } });
   assert.deepEqual(said, ['open'], 'subagent threads are never announced');
+  const remote = { ...running, id: 'remote', delegatedFrom: { environmentId: 'e2', threadId: 'p', title: 'Parent' } };
+  b.onT3Change({ kind: 'thread', prev: remote, thread: { ...remote, status: 'completed', activityRunStatus: null } });
+  assert.deepEqual(said, ['open'], 'nor are tasks another machine delegated here');
 });
 
 test('running subagent threads are listed, idle ones are not', async () => {
@@ -795,4 +828,29 @@ test('running subagent threads are listed, idle ones are not', async () => {
   const ids = b.buildSnapshot().threads.map((t) => t.id);
   assert.ok(ids.includes('busy-kid'), 'a running subagent thread is listed');
   assert.ok(!ids.includes('idle-kid'), 'an idle one is not');
+});
+
+test('a task another machine delegated here is listed like a subagent thread', () => {
+  const { b } = fakeBridge();
+  const now = new Date().toISOString();
+  const delegatedFrom = { environmentId: 'e2', threadId: 'p', title: 'Parent' };
+  b.t3.threads.set('busy-task', { id: 'busy-task', title: 'Busy', projectId: 'p1', status: 'running', activityRunStatus: 'running', delegatedFrom, updatedAt: now });
+  b.t3.threads.set('idle-task', { id: 'idle-task', title: 'Idle', projectId: 'p1', status: 'completed', delegatedFrom, updatedAt: now });
+  // A thread an agent launched for the player stores delegatedFrom: null and is its own thread.
+  b.t3.threads.set('handoff', { id: 'handoff', title: 'Handoff', projectId: 'p1', status: 'completed', delegatedFrom: null, updatedAt: now });
+  const ids = b.buildSnapshot().threads.map((t) => t.id);
+  assert.ok(ids.includes('busy-task'), 'a running delegated task is listed');
+  assert.ok(!ids.includes('idle-task'), 'an idle one is not');
+  assert.ok(ids.includes('handoff'), 'a handoff thread is listed whatever its state');
+});
+
+test("a machine's thread count leaves out subagent threads and delegated tasks", async () => {
+  const { Fleet } = await import('../src/fleet.js');
+  const fleet = new Fleet({ localTokens: async () => 'x' });
+  const threads = fleet.local.client.threads;
+  threads.set('top', { id: 'top' });
+  threads.set('handoff', { id: 'handoff', delegatedFrom: null });
+  threads.set('kid', { id: 'kid', lineage: { parentThreadId: 'top' } });
+  threads.set('task', { id: 'task', delegatedFrom: { environmentId: 'e2', threadId: 'p' } });
+  assert.equal(fleet.environments()[0].threads, 2);
 });

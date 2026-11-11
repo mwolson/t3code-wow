@@ -23,6 +23,7 @@ test('without defaults, the latest thread in the project, then anywhere', () => 
     { projectId: 'q', createdAt: '2026-11-08T00:00:00Z', modelSelection: sel('codex', 'elsewhere') },
     { projectId: 'p', createdAt: '2026-11-09T00:00:00Z', modelSelection: sel('codex', 'deleted'), deletedAt: '2026-11-09T01:00:00Z' },
     { projectId: 'p', createdAt: '2026-11-10T00:00:00Z', modelSelection: sel('codex', 'subagent'), lineage: { parentThreadId: 'x' } },
+    { projectId: 'p', createdAt: '2026-11-11T00:00:00Z', modelSelection: sel('codex', 'delegated'), delegatedFrom: { environmentId: 'e2', threadId: 'y' } },
   ];
   const settings = { defaultModelSelection: null, fallbackModelSelection: null };
   assert.equal(pickModelSelection({ project: { id: 'p' }, settings, threads, providers }).model, 'new-here');
@@ -66,6 +67,13 @@ test('a picked model keeps the options last used with it', () => {
   // "Latest" is the latest active, the order the game lists threads in.
   threads[0].latestRunStartedAt = '2026-11-08T00:00:00Z';
   assert.deepEqual(chosenModelSelection({ instanceId: 'codex', model: 'b' }, { providers, candidates: [auto], threads }).options, high);
+  // A task another machine delegated here runs on what its parent chose: not a choice either.
+  const max = [{ id: 'reasoningEffort', value: 'max' }];
+  threads.push({ createdAt: '2026-11-09T00:00:00Z', modelSelection: { instanceId: 'codex', model: 'b', options: max }, delegatedFrom: { environmentId: 'e2', threadId: 'y' } });
+  assert.deepEqual(chosenModelSelection({ instanceId: 'codex', model: 'b' }, { providers, candidates: [auto], threads }).options, high);
+  // A thread an agent launched for the player (delegatedFrom: null) still counts.
+  threads.push({ createdAt: '2026-11-10T00:00:00Z', modelSelection: { instanceId: 'codex', model: 'b', options: max }, delegatedFrom: null });
+  assert.deepEqual(chosenModelSelection({ instanceId: 'codex', model: 'b' }, { providers, candidates: [auto], threads }).options, max);
   // Never used: no options, so T3 applies the model's defaults.
   assert.deepEqual(chosenModelSelection({ instanceId: 'codex', model: 'b' }, { providers }), { instanceId: 'codex', model: 'b' });
   assert.throws(() => chosenModelSelection({ instanceId: 'off', model: 'z' }, { providers }), /switched off/);
