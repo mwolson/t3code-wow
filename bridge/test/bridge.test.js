@@ -844,6 +844,47 @@ test('a task another machine delegated here is listed like a subagent thread', (
   assert.ok(ids.includes('handoff'), 'a handoff thread is listed whatever its state');
 });
 
+test('a forked thread is a thread of its own; a subagent or side chat is not', async () => {
+  const { b } = fakeBridge();
+  const now = new Date().toISOString();
+  const idle = (id, lineage) => ({ id, title: id, projectId: 'p1', status: 'completed', updatedAt: now, lineage: { parentThreadId: 't1', rootThreadId: 't1', ...lineage } });
+  b.t3.threads.set('fork', idle('fork', { relationshipToParent: 'fork' }));
+  b.t3.threads.set('side-chat', idle('side-chat', { relationshipToParent: 'fork', sideChat: true }));
+  b.t3.threads.set('kid', idle('kid', { relationshipToParent: 'subagent' }));
+  const ids = b.buildSnapshot().threads.map((t) => t.id);
+  assert.ok(ids.includes('fork'), 'an idle fork stays listed');
+  assert.ok(!ids.includes('side-chat'), 'an idle side chat does not');
+  assert.ok(!ids.includes('kid'), 'nor an idle subagent thread');
+
+  const said = [];
+  b.announce = (t) => said.push(t.id);
+  for (const id of ['fork', 'side-chat', 'kid']) {
+    const done = b.t3.threads.get(id);
+    b.onT3Change({ kind: 'thread', prev: { ...done, status: 'running', activityRunStatus: 'running' }, thread: done });
+  }
+  assert.deepEqual(said, ['fork'], 'only the fork finishing is announced');
+
+  const { Fleet } = await import('../src/fleet.js');
+  const fleet = new Fleet({ localTokens: async () => 'x' });
+  for (const [id, t] of b.t3.threads) if (['fork', 'side-chat', 'kid'].includes(id)) fleet.local.client.threads.set(id, t);
+  assert.equal(fleet.environments()[0].threads, 1, 'and only the fork is counted');
+});
+
+test('which threads belong to a parent', async () => {
+  const { belongsToParent } = await import('../src/t3.js');
+  const lineage = (extra) => ({ lineage: { parentThreadId: 'p', rootThreadId: 'p', ...extra } });
+  assert.equal(belongsToParent(lineage({ relationshipToParent: 'subagent' })), true);
+  assert.equal(belongsToParent(lineage({ relationshipToParent: 'fork', sideChat: true })), true);
+  assert.equal(belongsToParent(lineage({ relationshipToParent: 'fork' })), false, 'a fork, whatever its parent is');
+  assert.equal(belongsToParent(lineage({ relationshipToParent: null })), false, 'a parent with no relationship named');
+  assert.equal(belongsToParent({ lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: 't' } }), false);
+  assert.equal(belongsToParent({ lineage: null }), false);
+  assert.equal(belongsToParent({}), false);
+  // A server that sends no relationship at all: any parent is a subagent, as before.
+  assert.equal(belongsToParent({ lineage: { parentThreadId: 'p' } }), true);
+  assert.equal(belongsToParent({ ...lineage({ relationshipToParent: 'fork' }), delegatedFrom: { environmentId: 'e2', threadId: 'y' } }), true);
+});
+
 test("a machine's thread count leaves out subagent threads and delegated tasks", async () => {
   const { Fleet } = await import('../src/fleet.js');
   const fleet = new Fleet({ localTokens: async () => 'x' });
