@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto';
 import { RS, US } from './codec.js';
 import { StripCapture } from './capture.js';
 import { SlotBank, replaceFile, FileInUse } from './slots.js';
-import { threadStatus, isUnread, effortOf, waitingOn, isDelegatedThread } from './t3.js';
+import { threadStatus, isUnread, effortOf, waitingOn, belongsToParent } from './t3.js';
 import { Fleet } from './fleet.js';
 import { tokenProvider } from './auth.js';
 import { Voice } from './voice.js';
@@ -712,7 +712,7 @@ export class Bridge {
       else if (ACTIVE.has(status)) this.refreshView(t.id);
       if (before !== status) {
         this.markDirty('important');
-        if (isDelegatedThread(t)) return; // no announcements for subagent threads
+        if (belongsToParent(t)) return; // no announcements for subagent threads
         if (BUSY.has(before) && !BUSY.has(status)) this.announce(t, status);
         else if (status === 'input' && before !== 'input') this.announce(t, status);
       } else {
@@ -766,7 +766,7 @@ export class Bridge {
     let threads = [...t3.threads.values()]
       .map((t) => ({ t, s: threadStatus(t) }))
       // Subagent threads only while they're busy, like T3's own sidebar.
-      .filter(({ t, s }) => s !== 'archived' && (!isDelegatedThread(t) || ACTIVE.has(s)));
+      .filter(({ t, s }) => s !== 'archived' && (!belongsToParent(t) || ACTIVE.has(s)));
     threads.sort((a, b) => ORDER[a.s] - ORDER[b.s] || Date.parse(b.t.updatedAt) - Date.parse(a.t.updatedAt));
     let settled = 0;
     threads = threads.filter(({ s }) => s !== 'settled' || ++settled <= 30).slice(0, 90);
