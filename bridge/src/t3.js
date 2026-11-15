@@ -434,7 +434,8 @@ export class T3Client extends EventEmitter {
 
   sendMessage(threadId, text, mode = 'auto', attachments = []) {
     const t = this.threads.get(threadId);
-    const busy = t && threadStatus(t) === 'working';
+    // A run that waits (on a subagent, another thread) is still a run: queue behind it.
+    const busy = t && isRunning(t);
     let dispatchMode = { type: 'start_immediately' };
     if (mode === 'steer' && t?.activeRunId) dispatchMode = { type: 'steer_active', targetRunId: t.activeRunId };
     else if (busy) dispatchMode = { type: 'queue_after_active' };

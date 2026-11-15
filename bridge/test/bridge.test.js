@@ -890,6 +890,27 @@ test('a thread whose child threads still run is waiting on them, as in T3 Code',
   assert.equal(row().s, 'open', 'a running fork is a thread of its own and holds nobody');
 });
 
+test('a message to a thread whose run goes on is queued, even while that run waits', async () => {
+  const { T3Client } = await import('../src/t3.js');
+  const c = new T3Client({ tokenProvider: async () => 'x' });
+  const modes = [];
+  c.dispatch = async (command) => modes.push(command.dispatchMode);
+  const run = { status: 'running', activityRunStatus: 'running', activeRunId: 'r1' };
+  c.threads.set('ended', { id: 'ended', status: 'completed', activityRunStatus: null, activeRunId: null, pendingBackgroundTasks: [{ taskId: 'a', kind: 'subagent' }] });
+  c.threads.set('running', { id: 'running', ...run });
+  c.threads.set('blocked', { id: 'blocked', ...run, blockedOnThreadWait: true });
+  c.threads.set('awaiting', { id: 'awaiting', ...run, pendingBackgroundTasks: [{ taskId: 'b', kind: 'subagent' }] });
+  for (const id of ['ended', 'running', 'blocked', 'awaiting']) await c.sendMessage(id, 'hi');
+  await c.sendMessage('blocked', 'hi', 'steer');
+  assert.deepEqual(modes, [
+    { type: 'start_immediately' },
+    { type: 'queue_after_active' },
+    { type: 'queue_after_active' },
+    { type: 'queue_after_active' },
+    { type: 'steer_active', targetRunId: 'r1' },
+  ]);
+});
+
 test('ending a turn into waiting is not announced; the wait ending is', async () => {
   const { b } = fakeBridge();
   const said = [];
