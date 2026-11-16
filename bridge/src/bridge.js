@@ -175,6 +175,20 @@ export function runSummary(projection, now = Date.now()) {
   return `${run.completedAt ? 'Last run' : 'This run so far'}: ${parts.join(' · ')}`;
 }
 
+// T3 Code writes some user messages itself, such as a delegated task's result
+// queued for the agent while its run still goes on. Nobody typed those, and T3
+// Code turns them into a notification once they are delivered.
+function isT3Notice(m) {
+  return m.role === 'user' && m.createdBy === 'agent' && m.creationSource === 'server';
+}
+
+// Follow-ups the player sent that wait behind the run going on. T3 Code queues
+// its own messages the same way, and those are not the player's to count.
+function queuedFollowUps(p) {
+  const notices = new Set((p.messages || []).filter(isT3Notice).map((m) => m.id));
+  return (p.runs || []).filter((r) => r.status === 'queued' && !notices.has(r.userMessageId)).length;
+}
+
 export function proposedPlan(projection) {
   const plan = [...(projection?.turnItems || [])].reverse().find((i) => i.type === 'proposed_plan' && i.markdown);
   return plan ? plan.markdown : null;
@@ -952,7 +966,7 @@ export class Bridge {
       const t = t3.threads.get(viewId);
       if (v?.projection) {
         const p = v.projection;
-        const msgs = (p.messages || []).filter((m) => (m.role === 'user' || m.role === 'assistant') && m.text?.trim());
+        const msgs = (p.messages || []).filter((m) => (m.role === 'user' || m.role === 'assistant') && m.text?.trim() && !isT3Notice(m));
         let budget = 60000;
         const out = [];
         for (let i = msgs.length - 1; i >= 0 && out.length < 40; i--) {
@@ -974,7 +988,7 @@ export class Bridge {
           err: t?.lastError ? escapeWow(String(t.lastError).slice(0, 300)) : undefined,
           plan: plan ? markdownToWow(plan, { maxChars: 6000 }) : undefined,
           sum: sum ? escapeWow(sum) : undefined,
-          queued: (p.runs || []).filter((r) => r.status === 'queued').length || undefined,
+          queued: queuedFollowUps(p) || undefined,
           shots: this.shots.get(viewId)?.length || undefined,
         };
       } else {

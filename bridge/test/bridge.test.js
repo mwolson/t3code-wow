@@ -125,6 +125,34 @@ test('parseFrame reads the hashes of the parts the addon holds: projects, transc
   assert.equal(older.hello.hashes.fam, '', 'an addon without the family reports none');
 });
 
+test('a message T3 Code wrote itself is left out of the transcript', () => {
+  const { b } = fakeBridge();
+  b.client = { session: 'sess', ui: 'ui1', ackedSeq: -1, flags: 'o', view: 't1', hashes: {} };
+  const at = '2026-11-01T00:00:00Z';
+  b.views.set('t1', {
+    projection: {
+      messages: [
+        { role: 'user', text: 'fix the build', createdBy: 'user', creationSource: 'web', createdAt: at },
+        { role: 'assistant', text: 'delegated', createdAt: at },
+        // A finished task's result, queued for the agent behind the run still going on.
+        { id: 'm3', role: 'user', text: 'Delegated task node:delegated-task:x (Fix the build) [completed]:\ndone', createdBy: 'agent', creationSource: 'server', createdAt: at },
+        { id: 'm4', role: 'user', text: 'and then the tests', createdBy: 'user', creationSource: 'web', createdAt: at },
+      ],
+      turnItems: [],
+      runtimeRequests: [],
+      // Both wait behind the run going on, but only one is a follow-up the player sent.
+      runs: [
+        { id: 'r3', status: 'queued', userMessageId: 'm3' },
+        { id: 'r4', status: 'queued', userMessageId: 'm4' },
+      ],
+    },
+    fetchedAt: Date.now(),
+  });
+  const { msgs, queued } = b.buildSnapshot().view;
+  assert.deepEqual(msgs.map((m) => [m.r, m.t]), [['u', 'fix the build'], ['a', 'delegated'], ['u', 'and then the tests']]);
+  assert.equal(queued, 1);
+});
+
 test('a publish leaves out what the addon already holds, but slots 1-3 stay complete', needsLua, () => {
   const { b, dir } = fakeBridge();
   b.client = { session: 'sess', ui: 'ui1', ackedSeq: -1, flags: 'o', view: 't1', hashes: {} };
